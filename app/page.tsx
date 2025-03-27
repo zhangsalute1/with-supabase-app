@@ -53,6 +53,7 @@ export default function Home() {
   } | null>(null);
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null);
 
   // 提供用户反馈
   const showFeedback = (
@@ -72,6 +73,8 @@ export default function Home() {
       setIsLoading(true);
       try {
         const supabase = createClient();
+        supabaseRef.current = supabase;
+
         const { data } = await supabase.auth.getUser();
         setUser(data.user);
 
@@ -99,6 +102,51 @@ export default function Home() {
 
     checkUserAndLoadTodos();
   }, []);
+
+  // 添加 Supabase Realtime 订阅
+  useEffect(() => {
+    if (!user || !supabaseRef.current) return;
+
+    const supabase = supabaseRef.current;
+
+    const subscription = supabase
+      .channel("todos-channel")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "todos",
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          console.log("实时更新:", payload);
+
+          if (payload.eventType === "INSERT") {
+            const newTodo = payload.new as Todo;
+            setTodos((prev) => [newTodo, ...prev]);
+            showFeedback("收到新任务", "info");
+          } else if (payload.eventType === "UPDATE") {
+            const updatedTodo = payload.new as Todo;
+            setTodos((prev) =>
+              prev.map((todo) =>
+                todo.id === updatedTodo.id ? updatedTodo : todo
+              )
+            );
+          } else if (payload.eventType === "DELETE") {
+            const deletedTodoId = payload.old.id;
+            setTodos((prev) =>
+              prev.filter((todo) => todo.id !== deletedTodoId)
+            );
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.channel("todos-channel").unsubscribe();
+    };
+  }, [user]);
 
   // 处理图片选择
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -219,7 +267,7 @@ export default function Home() {
           showFeedback("添加待办事项失败", "error");
         } else if (data && data.length > 0) {
           console.log("成功添加新待办事项:", data[0].text);
-          setTodos((prev) => [data[0], ...prev]);
+
           setNewTodo("");
           // 清除已选择的图片
           clearSelectedImage();
@@ -256,11 +304,6 @@ export default function Home() {
         console.log(
           `待办事项 "${todoToUpdate.text}" 已${newStatus ? "完成" : "恢复未完成"}`
         );
-        setTodos(
-          todos.map((todo) =>
-            todo.id === id ? { ...todo, completed: newStatus } : todo
-          )
-        );
         showFeedback(`已${newStatus ? "完成" : "取消完成"}任务`, "success");
       }
     } catch (err) {
@@ -271,12 +314,6 @@ export default function Home() {
 
   // 删除待办事项
   const deleteTodo = async (id: string) => {
-    const todoToDelete = todos.find((todo) => todo.id === id);
-    if (!todoToDelete) return;
-
-    // 先在UI上直接移除，以提供即时反馈
-    setTodos(todos.filter((todo) => todo.id !== id));
-
     try {
       const supabase = createClient();
       const { error } = await supabase.from("todos").delete().eq("id", id);
@@ -284,28 +321,12 @@ export default function Home() {
       if (error) {
         console.error("删除待办事项失败:", error.message);
         showFeedback("删除失败，请重试", "error");
-        // 回滚UI
-        setTodos((prev) =>
-          [...prev, todoToDelete].sort(
-            (a, b) =>
-              new Date(b.created_at).getTime() -
-              new Date(a.created_at).getTime()
-          )
-        );
       } else {
-        console.log(`待办事项 "${todoToDelete.text}" 已删除`);
         showFeedback("任务已删除", "info");
       }
     } catch (err) {
       console.error("删除待办事项时出错:", err);
       showFeedback("删除时发生错误", "error");
-      // 回滚UI
-      setTodos((prev) =>
-        [...prev, todoToDelete].sort(
-          (a, b) =>
-            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        )
-      );
     }
   };
 
@@ -313,9 +334,6 @@ export default function Home() {
   const clearCompleted = async () => {
     const completedTodos = todos.filter((todo) => todo.completed);
     if (completedTodos.length === 0) return;
-
-    // 先在UI上更新
-    setTodos(todos.filter((todo) => !todo.completed));
 
     try {
       const completedIds = completedTodos.map((todo) => todo.id);
@@ -329,14 +347,6 @@ export default function Home() {
       if (error) {
         console.error("清除已完成待办事项失败:", error.message);
         showFeedback("清除已完成任务失败", "error");
-        // 回滚UI
-        setTodos((prev) =>
-          [...prev, ...completedTodos].sort(
-            (a, b) =>
-              new Date(b.created_at).getTime() -
-              new Date(a.created_at).getTime()
-          )
-        );
       } else {
         console.log(`已清除 ${completedIds.length} 个已完成的待办事项`);
         showFeedback(`已清除 ${completedIds.length} 个已完成任务`, "success");
@@ -344,14 +354,6 @@ export default function Home() {
     } catch (err) {
       console.error("清除已完成待办事项时出错:", err);
       showFeedback("清除时发生错误", "error");
-      // 回滚UI
-      const completedTodos = todos.filter((todo) => todo.completed);
-      setTodos((prev) =>
-        [...prev, ...completedTodos].sort(
-          (a, b) =>
-            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        )
-      );
     }
   };
 
