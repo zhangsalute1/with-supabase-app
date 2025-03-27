@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Check,
   Plus,
@@ -29,6 +29,7 @@ interface Todo {
   user_id: string;
   text: string;
   completed: boolean;
+  image_url?: string | null;
   created_at: string;
   updated_at: string | null;
 }
@@ -43,11 +44,15 @@ export default function Home() {
   const [user, setUser] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [selectedImage, setSelectedImage] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<{
     message: string;
     type: "success" | "error" | "info";
   } | null>(null);
   const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 提供用户反馈
   const showFeedback = (
@@ -95,6 +100,80 @@ export default function Home() {
     checkUserAndLoadTodos();
   }, []);
 
+  // 处理图片选择
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      const file = files[0];
+      // 检查文件类型
+      if (!file.type.startsWith("image/")) {
+        showFeedback("请选择图片文件", "error");
+        return;
+      }
+
+      // 设置选中的图片
+      setSelectedImage(file);
+
+      // 创建预览URL
+      const objectUrl = URL.createObjectURL(file);
+      setPreviewUrl(objectUrl);
+
+      // 需要在组件卸载时清理这个URL
+      return () => URL.revokeObjectURL(objectUrl);
+    }
+  };
+
+  // 清除选中的图片
+  const clearSelectedImage = () => {
+    setSelectedImage(null);
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(null);
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  // 上传图片到Supabase存储
+  const uploadImage = async (file: File): Promise<string | null> => {
+    if (!user) return null;
+
+    try {
+      setIsUploading(true);
+      const supabase = createClient();
+
+      // 生成唯一的文件名
+      const fileExt = file.name.split(".").pop();
+      const fileName = `${Math.random().toString(36).substring(2, 15)}_${Date.now()}.${fileExt}`;
+      const filePath = `${user.id}/${fileName}`;
+
+      // 上传文件到my-todo bucket
+      const { data, error } = await supabase.storage
+        .from("my-todo")
+        .upload(filePath, file, {
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+      if (error) {
+        throw error;
+      }
+
+      // 获取公共URL
+      const {
+        data: { publicUrl },
+      } = supabase.storage.from("my-todo").getPublicUrl(filePath);
+
+      return publicUrl;
+    } catch (error) {
+      console.error("上传图片失败:", error);
+      return null;
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   // 添加待办事项
   const addTodo = useCallback(
     async (e: React.FormEvent) => {
@@ -111,6 +190,17 @@ export default function Home() {
       setIsSubmitting(true);
 
       try {
+        // 上传图片（如果有）
+        let imageUrl = null;
+        if (selectedImage) {
+          imageUrl = await uploadImage(selectedImage);
+          if (!imageUrl) {
+            showFeedback("图片上传失败", "error");
+            setIsSubmitting(false);
+            return;
+          }
+        }
+
         const supabase = createClient();
         const { data, error } = await supabase
           .from("todos")
@@ -119,6 +209,7 @@ export default function Home() {
               text: newTodo.trim(),
               user_id: user.id,
               completed: false,
+              image_url: imageUrl,
             },
           ])
           .select();
@@ -130,6 +221,8 @@ export default function Home() {
           console.log("成功添加新待办事项:", data[0].text);
           setTodos((prev) => [data[0], ...prev]);
           setNewTodo("");
+          // 清除已选择的图片
+          clearSelectedImage();
           showFeedback("成功添加新待办事项", "success");
         }
       } catch (err) {
@@ -139,7 +232,7 @@ export default function Home() {
         setIsSubmitting(false);
       }
     },
-    [newTodo, user, router]
+    [newTodo, user, router, selectedImage]
   );
 
   // 切换待办事项状态
@@ -493,7 +586,7 @@ export default function Home() {
                 </div>
               )}
 
-              <form onSubmit={addTodo}>
+              <form onSubmit={addTodo} className="space-y-4">
                 <div className="flex gap-2">
                   <Input
                     type="text"
@@ -501,14 +594,16 @@ export default function Home() {
                     onChange={(e) => setNewTodo(e.target.value)}
                     placeholder="添加新任务..."
                     className="flex-1 focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                    disabled={isSubmitting || !user}
+                    disabled={isSubmitting || isUploading || !user}
                   />
                   <Button
                     type="submit"
                     className="bg-blue-500 hover:bg-blue-600 text-white transition-colors flex items-center gap-2"
-                    disabled={isSubmitting || !user}
+                    disabled={
+                      isSubmitting || isUploading || !user || !newTodo.trim()
+                    }
                   >
-                    {isSubmitting ? (
+                    {isSubmitting || isUploading ? (
                       <LoadingSpinner size={18} />
                     ) : (
                       <Plus size={18} />
@@ -516,8 +611,83 @@ export default function Home() {
                     添加
                   </Button>
                 </div>
+
+                {/* 图片上传区域 */}
+                <div className="mt-2">
+                  <div className="flex items-center">
+                    <label htmlFor="todo-image" className="cursor-pointer">
+                      <div className="flex items-center gap-2 text-sm text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          width="20"
+                          height="20"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <rect
+                            x="3"
+                            y="3"
+                            width="18"
+                            height="18"
+                            rx="2"
+                            ry="2"
+                          ></rect>
+                          <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                          <polyline points="21 15 16 10 5 21"></polyline>
+                        </svg>
+                        <span>添加图片附件</span>
+                      </div>
+                    </label>
+                    <input
+                      id="todo-image"
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleImageSelect}
+                      className="hidden"
+                      disabled={isSubmitting || isUploading || !user}
+                    />
+                  </div>
+
+                  {/* 图片预览 */}
+                  {previewUrl && (
+                    <div className="mt-3 relative inline-block">
+                      <img
+                        src={previewUrl}
+                        alt="图片预览"
+                        className="max-h-40 max-w-full rounded-lg border border-gray-200 dark:border-gray-700"
+                      />
+                      <button
+                        type="button"
+                        onClick={clearSelectedImage}
+                        className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 hover:bg-red-600 transition-colors"
+                        disabled={isSubmitting || isUploading}
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <line x1="18" y1="6" x2="6" y2="18"></line>
+                          <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 {!user && (
-                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
                     请先登录后添加任务
                   </p>
                 )}
@@ -590,49 +760,70 @@ export default function Home() {
                     <div
                       key={todo.id}
                       className={cn(
-                        "flex items-center gap-4 p-4 rounded-xl transition-all border border-transparent",
+                        "flex flex-col gap-4 p-4 rounded-xl transition-all border border-transparent",
                         "bg-gray-50 dark:bg-gray-700/50",
                         "hover:border-blue-200 dark:hover:border-blue-800 hover:shadow-md",
                         todo.completed && "bg-gray-50/50 dark:bg-gray-800/30"
                       )}
                     >
-                      <button
-                        onClick={() => toggleTodo(todo.id)}
-                        className={cn(
-                          "h-6 w-6 rounded-full flex items-center justify-center border-2 transition-colors",
-                          todo.completed
-                            ? "bg-blue-500 border-blue-500 text-white"
-                            : "border-gray-300 dark:border-gray-600 hover:border-blue-400"
-                        )}
-                        disabled={!user}
-                      >
-                        {todo.completed && <Check size={16} />}
-                      </button>
-
-                      <div className="flex-1 flex flex-col">
-                        <span
+                      <div className="flex items-center gap-4">
+                        <button
+                          onClick={() => toggleTodo(todo.id)}
                           className={cn(
-                            "text-base font-medium text-gray-800 dark:text-gray-200 transition-all",
-                            todo.completed &&
-                              "line-through text-gray-400 dark:text-gray-500"
+                            "h-6 w-6 rounded-full flex items-center justify-center border-2 transition-colors",
+                            todo.completed
+                              ? "bg-blue-500 border-blue-500 text-white"
+                              : "border-gray-300 dark:border-gray-600 hover:border-blue-400"
                           )}
+                          disabled={!user}
                         >
-                          {todo.text}
-                        </span>
-                        <span className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                          创建于: {new Date(todo.created_at).toLocaleString()}
-                        </span>
+                          {todo.completed && <Check size={16} />}
+                        </button>
+
+                        <div className="flex-1 flex flex-col">
+                          <span
+                            className={cn(
+                              "text-base font-medium text-gray-800 dark:text-gray-200 transition-all",
+                              todo.completed &&
+                                "line-through text-gray-400 dark:text-gray-500"
+                            )}
+                          >
+                            {todo.text}
+                          </span>
+                          <span className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                            创建于: {new Date(todo.created_at).toLocaleString()}
+                          </span>
+                        </div>
+
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => deleteTodo(todo.id)}
+                          className="text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors"
+                          disabled={!user}
+                        >
+                          <Trash2 size={18} />
+                        </Button>
                       </div>
 
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => deleteTodo(todo.id)}
-                        className="text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors"
-                        disabled={!user}
-                      >
-                        <Trash2 size={18} />
-                      </Button>
+                      {/* 显示任务附带的图片 */}
+                      {todo.image_url && (
+                        <div className="mt-2 max-w-md">
+                          <a
+                            href={todo.image_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="block"
+                          >
+                            <img
+                              src={todo.image_url}
+                              alt="任务附件"
+                              className="w-full max-h-56 object-contain rounded-lg border border-gray-200 dark:border-gray-700 hover:opacity-90 transition-opacity"
+                              loading="lazy"
+                            />
+                          </a>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
