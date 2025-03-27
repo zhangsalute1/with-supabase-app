@@ -12,11 +12,7 @@ export const signUpAction = async (formData: FormData) => {
   const origin = (await headers()).get("origin");
 
   if (!email || !password) {
-    return encodedRedirect(
-      "error",
-      "/sign-up",
-      "Email and password are required"
-    );
+    return encodedRedirect("error", "/sign-up", "邮箱和密码不能为空");
   }
 
   const { error } = await supabase.auth.signUp({
@@ -29,12 +25,12 @@ export const signUpAction = async (formData: FormData) => {
 
   if (error) {
     console.error(error.code + " " + error.message);
-    return encodedRedirect("error", "/sign-up", error.message);
+    return encodedRedirect("error", "/sign-up", translateError(error.message));
   } else {
     return encodedRedirect(
       "success",
       "/sign-up",
-      "Thanks for signing up! Please check your email for a verification link."
+      "注册成功！请检查您的邮箱并点击验证链接完成注册。"
     );
   }
 };
@@ -50,7 +46,7 @@ export const signInAction = async (formData: FormData) => {
   });
 
   if (error) {
-    return encodedRedirect("error", "/sign-in", error.message);
+    return encodedRedirect("error", "/sign-in", translateError(error.message));
   }
 
   return redirect("/");
@@ -63,7 +59,7 @@ export const forgotPasswordAction = async (formData: FormData) => {
   const callbackUrl = formData.get("callbackUrl")?.toString();
 
   if (!email) {
-    return encodedRedirect("error", "/forgot-password", "Email is required");
+    return encodedRedirect("error", "/forgot-password", "请输入邮箱地址");
   }
 
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
@@ -75,7 +71,7 @@ export const forgotPasswordAction = async (formData: FormData) => {
     return encodedRedirect(
       "error",
       "/forgot-password",
-      "Could not reset password"
+      "密码重置失败，请稍后再试"
     );
   }
 
@@ -86,7 +82,7 @@ export const forgotPasswordAction = async (formData: FormData) => {
   return encodedRedirect(
     "success",
     "/forgot-password",
-    "Check your email for a link to reset your password."
+    "已发送重置密码链接到您的邮箱，请查收"
   );
 };
 
@@ -100,7 +96,7 @@ export const resetPasswordAction = async (formData: FormData) => {
     encodedRedirect(
       "error",
       "/protected/reset-password",
-      "Password and confirm password are required"
+      "密码和确认密码不能为空"
     );
   }
 
@@ -108,7 +104,7 @@ export const resetPasswordAction = async (formData: FormData) => {
     encodedRedirect(
       "error",
       "/protected/reset-password",
-      "Passwords do not match"
+      "两次输入的密码不一致"
     );
   }
 
@@ -120,11 +116,11 @@ export const resetPasswordAction = async (formData: FormData) => {
     encodedRedirect(
       "error",
       "/protected/reset-password",
-      "Password update failed"
+      "密码更新失败，请稍后再试"
     );
   }
 
-  encodedRedirect("success", "/protected/reset-password", "Password updated");
+  encodedRedirect("success", "/protected/reset-password", "密码已更新成功");
 };
 
 export const signOutAction = async () => {
@@ -132,3 +128,18 @@ export const signOutAction = async () => {
   await supabase.auth.signOut();
   return redirect("/sign-in");
 };
+
+// 翻译Supabase常见错误信息
+function translateError(errorMessage: string): string {
+  const errorMap: Record<string, string> = {
+    "Invalid login credentials": "登录凭证无效，请检查邮箱和密码",
+    "Email not confirmed": "邮箱未验证，请先验证您的邮箱",
+    "User already registered": "该邮箱已被注册",
+    "Password should be at least 6 characters": "密码长度至少为6个字符",
+    "For security purposes, you can only request this once every 60 seconds":
+      "出于安全考虑，60秒内只能请求一次",
+    "Email link is invalid or has expired": "邮件链接无效或已过期",
+  };
+
+  return errorMap[errorMessage] || errorMessage;
+}

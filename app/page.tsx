@@ -1,12 +1,24 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Check, Plus, Trash2, Moon, Sun, Calendar, Search } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import {
+  Check,
+  Plus,
+  Trash2,
+  Moon,
+  Sun,
+  Calendar,
+  Search,
+  LogIn,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useTheme } from "next-themes";
 import { Label } from "@radix-ui/react-label";
+import { createClient } from "@/utils/supabase/client";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 interface Todo {
   id: string;
@@ -22,6 +34,22 @@ export default function Home() {
   const { theme, setTheme } = useTheme();
   const [searchTerm, setSearchTerm] = useState("");
   const [showSearch, setShowSearch] = useState(false);
+  const [user, setUser] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const router = useRouter();
+
+  // 检查用户登录状态
+  useEffect(() => {
+    const checkUser = async () => {
+      setIsLoading(true);
+      const supabase = createClient();
+      const { data } = await supabase.auth.getUser();
+      setUser(data.user);
+      setIsLoading(false);
+    };
+
+    checkUser();
+  }, []);
 
   // 从本地存储加载待办事项
   useEffect(() => {
@@ -36,21 +64,30 @@ export default function Home() {
     localStorage.setItem("todos", JSON.stringify(todos));
   }, [todos]);
 
-  const addTodo = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newTodo.trim()) return;
+  const addTodo = useCallback(
+    (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!newTodo.trim()) return;
 
-    setTodos([
-      ...todos,
-      {
-        id: Date.now().toString(),
-        text: newTodo.trim(),
-        completed: false,
-        createdAt: new Date().toISOString(),
-      },
-    ]);
-    setNewTodo("");
-  };
+      // 如果用户未登录，重定向到登录页面
+      if (!user) {
+        router.push("/sign-in");
+        return;
+      }
+
+      setTodos([
+        ...todos,
+        {
+          id: Date.now().toString(),
+          text: newTodo.trim(),
+          completed: false,
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      setNewTodo("");
+    },
+    [newTodo, todos, user, router]
+  );
 
   const toggleTodo = (id: string) => {
     setTodos(
@@ -100,18 +137,32 @@ export default function Home() {
               任务管理系统
             </span>
           </h1>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            className="rounded-full h-10 w-10 bg-white/30 dark:bg-gray-800/30 backdrop-blur-sm"
-          >
-            {theme === "dark" ? (
-              <Sun className="h-5 w-5" />
+          <div className="flex items-center gap-4">
+            {user ? (
+              <span className="text-sm text-gray-600 dark:text-gray-300">
+                欢迎, {user.email}
+              </span>
             ) : (
-              <Moon className="h-5 w-5" />
+              <Button asChild variant="outline" className="rounded-full">
+                <Link href="/sign-in" className="flex items-center gap-2">
+                  <LogIn size={16} />
+                  登录
+                </Link>
+              </Button>
             )}
-          </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              className="rounded-full h-10 w-10 bg-white/30 dark:bg-gray-800/30 backdrop-blur-sm"
+            >
+              {theme === "dark" ? (
+                <Sun className="h-5 w-5" />
+              ) : (
+                <Moon className="h-5 w-5" />
+              )}
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -309,13 +360,28 @@ export default function Home() {
                   />
                 </svg>
                 <p className="text-lg font-medium">
-                  {filter === "all"
-                    ? "没有任务，休息一下吧！"
-                    : filter === "active"
-                      ? "恭喜！没有待完成的任务"
-                      : "还没有完成任何任务"}
+                  {!user ? (
+                    <span>登录后开始制定您的任务清单</span>
+                  ) : filter === "all" ? (
+                    "开始计划点什么吧！"
+                  ) : filter === "active" ? (
+                    "恭喜！没有待完成的任务"
+                  ) : (
+                    "还没有完成任何任务"
+                  )}
                 </p>
-                {filter !== "all" && (
+                {!user ? (
+                  <Button
+                    variant="link"
+                    asChild
+                    className="mt-2 flex items-center gap-2"
+                  >
+                    <Link href="/sign-in">
+                      <LogIn size={16} />
+                      立即登录
+                    </Link>
+                  </Button>
+                ) : filter !== "all" ? (
                   <Button
                     variant="link"
                     onClick={() => setFilter("all")}
@@ -323,7 +389,7 @@ export default function Home() {
                   >
                     查看全部任务
                   </Button>
-                )}
+                ) : null}
               </div>
             ) : (
               <div className="space-y-3">
