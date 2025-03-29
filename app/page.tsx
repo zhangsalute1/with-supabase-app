@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { useTheme } from "next-themes";
 import { Label } from "@radix-ui/react-label";
 import { createClient } from "@/utils/supabase/client";
@@ -226,7 +227,7 @@ export default function Home() {
   const addTodo = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!newTodo.trim()) return;
+      if (!newTodo.trim() && !selectedImage) return;
 
       // 如果用户未登录，重定向到登录页面
       if (!user) {
@@ -238,49 +239,50 @@ export default function Home() {
       setIsSubmitting(true);
 
       try {
-        // 上传图片（如果有）
         let imageUrl = null;
+
+        // 如果有图片，先上传图片
         if (selectedImage) {
           imageUrl = await uploadImage(selectedImage);
           if (!imageUrl) {
-            showFeedback("图片上传失败", "error");
-            setIsSubmitting(false);
-            return;
+            throw new Error("图片上传失败");
           }
         }
 
-        const supabase = createClient();
-        const { data, error } = await supabase
-          .from("todos")
-          .insert([
-            {
-              text: newTodo.trim(),
-              user_id: user.id,
-              completed: false,
-              image_url: imageUrl,
-            },
-          ])
-          .select();
+        // 通过API发送文本和图片URL进行解析
+        const response = await fetch("/api/parse-tasks", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            text: newTodo.trim(),
+            imageUrl: imageUrl,
+          }),
+        });
 
-        if (error) {
-          console.error("添加待办事项失败:", error.message);
-          showFeedback("添加待办事项失败", "error");
-        } else if (data && data.length > 0) {
-          console.log("成功添加新待办事项:", data[0].text);
-
-          setNewTodo("");
-          // 清除已选择的图片
-          clearSelectedImage();
-          showFeedback("成功添加新待办事项", "success");
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || "API请求失败");
         }
+
+        const result = await response.json();
+        console.log("AI解析任务成功:", result);
+
+        // 清除表单
+        setNewTodo("");
+        clearSelectedImage();
+
+        // 任务已由后端自动添加到数据库，数据库变更会通过Realtime API更新前端
+        showFeedback(`成功添加${result.tasksCount}个任务`, "success");
       } catch (err) {
-        console.error("添加待办事项时出错:", err);
-        showFeedback("添加待办事项时发生错误", "error");
+        console.error("解析任务时出错:", err);
+        showFeedback("添加任务时发生错误", "error");
       } finally {
         setIsSubmitting(false);
       }
     },
-    [newTodo, user, router, selectedImage]
+    [newTodo, selectedImage, user, router]
   );
 
   // 切换待办事项状态
@@ -589,103 +591,84 @@ export default function Home() {
               )}
 
               <form onSubmit={addTodo} className="space-y-4">
-                <div className="flex gap-2">
-                  <Input
-                    type="text"
+                <div className="flex flex-col gap-2">
+                  <Textarea
                     value={newTodo}
                     onChange={(e) => setNewTodo(e.target.value)}
-                    placeholder="添加新任务..."
-                    className="flex-1 focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                    disabled={isSubmitting || isUploading || !user}
+                    placeholder="添加新任务... 支持一次输入多个任务，AI将为您自动解析"
+                    className="flex-1 focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white min-h-[120px]"
+                    disabled={isSubmitting || !user}
+                    rows={3}
                   />
-                  <Button
-                    type="submit"
-                    className="bg-blue-500 hover:bg-blue-600 text-white transition-colors flex items-center gap-2"
-                    disabled={
-                      isSubmitting || isUploading || !user || !newTodo.trim()
-                    }
-                  >
-                    {isSubmitting || isUploading ? (
-                      <LoadingSpinner size={18} />
-                    ) : (
-                      <Plus size={18} />
-                    )}
-                    添加
-                  </Button>
-                </div>
 
-                {/* 图片上传区域 */}
-                <div className="mt-2">
-                  <div className="flex items-center">
-                    <label htmlFor="todo-image" className="cursor-pointer">
-                      <div className="flex items-center gap-2 text-sm text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          width="20"
-                          height="20"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
+                  {/* 添加图片上传区域 */}
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="file"
+                        ref={fileInputRef}
+                        onChange={handleImageSelect}
+                        accept="image/*"
+                        className="hidden"
+                        disabled={isSubmitting || !user}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="flex items-center gap-2"
+                        disabled={isSubmitting || !user}
+                      >
+                        <Plus size={18} />
+                        上传图片
+                      </Button>
+                      {selectedImage && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          onClick={clearSelectedImage}
+                          className="text-red-500 hover:text-red-600"
+                          disabled={isSubmitting}
                         >
-                          <rect
-                            x="3"
-                            y="3"
-                            width="18"
-                            height="18"
-                            rx="2"
-                            ry="2"
-                          ></rect>
-                          <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                          <polyline points="21 15 16 10 5 21"></polyline>
-                        </svg>
-                        <span>添加图片附件</span>
+                          <Trash2 size={18} />
+                          清除图片
+                        </Button>
+                      )}
+                    </div>
+
+                    {/* 图片预览 */}
+                    {previewUrl && (
+                      <div className="relative w-full max-w-md mx-auto">
+                        <img
+                          src={previewUrl}
+                          alt="预览图片"
+                          className="w-full rounded-lg border border-gray-200 dark:border-gray-700"
+                        />
                       </div>
-                    </label>
-                    <input
-                      id="todo-image"
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/*"
-                      onChange={handleImageSelect}
-                      className="hidden"
-                      disabled={isSubmitting || isUploading || !user}
-                    />
+                    )}
                   </div>
 
-                  {/* 图片预览 */}
-                  {previewUrl && (
-                    <div className="mt-3 relative inline-block">
-                      <img
-                        src={previewUrl}
-                        alt="图片预览"
-                        className="max-h-40 max-w-full rounded-lg border border-gray-200 dark:border-gray-700"
-                      />
-                      <button
-                        type="button"
-                        onClick={clearSelectedImage}
-                        className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 hover:bg-red-600 transition-colors"
-                        disabled={isSubmitting || isUploading}
-                      >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <line x1="18" y1="6" x2="6" y2="18"></line>
-                          <line x1="6" y1="6" x2="18" y2="18"></line>
-                        </svg>
-                      </button>
-                    </div>
-                  )}
+                  <Button
+                    type="submit"
+                    className="bg-blue-500 hover:bg-blue-600 text-white transition-colors flex items-center justify-center gap-2 px-6 py-2"
+                    disabled={
+                      isSubmitting ||
+                      !user ||
+                      (!newTodo.trim() && !selectedImage)
+                    }
+                  >
+                    {isSubmitting ? (
+                      <>
+                        <LoadingSpinner size={18} />
+                        处理中...
+                      </>
+                    ) : (
+                      <>
+                        <Plus size={18} />
+                        用AI解析并添加任务
+                      </>
+                    )}
+                  </Button>
                 </div>
 
                 {!user && (
